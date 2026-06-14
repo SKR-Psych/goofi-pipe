@@ -8,7 +8,7 @@ from tabulate import tabulate
 
 from goofi.data import Data, DataType
 from goofi.node import Node
-from goofi.params import BoolParam
+from goofi.params import BoolParam, FloatParam, IntParam, StringParam
 
 # pylsl default wait is 1.0s; short waits can miss outlets that advertise slightly later.
 # Multiple passes merged by uid fixes Muse-style multi-stream devices (same source_id + name, different type).
@@ -54,6 +54,88 @@ class LSLClient(Node):
                 "source_type": "",
                 "refresh": BoolParam(False, trigger=True),
             },
+            "validation": {
+                "strict_64ch_eeg": BoolParam(
+                    False,
+                    doc=(
+                        "Validate incoming EEG streams against the expected 64-channel montage. "
+                        "Disabled by default so existing arbitrary LSL streams keep working."
+                    ),
+                ),
+                "expected_channel_count": IntParam(64, 1, 512),
+                "expected_sfreq": FloatParam(250.0, 0.0, 10000.0),
+                "expected_channel_labels": StringParam(
+                    ",".join(
+                        [
+                            "Fp1",
+                            "Fp2",
+                            "F7",
+                            "F3",
+                            "Fz",
+                            "F4",
+                            "F8",
+                            "FC5",
+                            "FC1",
+                            "FC2",
+                            "FC6",
+                            "T7",
+                            "C3",
+                            "Cz",
+                            "C4",
+                            "T8",
+                            "CP5",
+                            "CP1",
+                            "CP2",
+                            "CP6",
+                            "P7",
+                            "P3",
+                            "Pz",
+                            "P4",
+                            "P8",
+                            "PO9",
+                            "O1",
+                            "Oz",
+                            "O2",
+                            "PO10",
+                            "AF7",
+                            "AF3",
+                            "AF4",
+                            "AF8",
+                            "F5",
+                            "F1",
+                            "F2",
+                            "F6",
+                            "FT7",
+                            "FC3",
+                            "FC4",
+                            "FT8",
+                            "C5",
+                            "C1",
+                            "C2",
+                            "C6",
+                            "TP7",
+                            "CP3",
+                            "CPz",
+                            "CP4",
+                            "TP8",
+                            "P5",
+                            "P1",
+                            "P2",
+                            "P6",
+                            "PO7",
+                            "PO3",
+                            "POz",
+                            "PO4",
+                            "PO8",
+                            "Iz",
+                            "FCz",
+                            "AFz",
+                            "Fpz",
+                        ]
+                    ),
+                    doc="Comma-separated expected EEG channel labels in stream order.",
+                ),
+            },
             "common": {"autotrigger": True},
         }
 
@@ -85,9 +167,7 @@ class LSLClient(Node):
         # initialize list of streams
         self.connect()
 
-    def process(
-        self, source_name: Data, stream_name: Data, source_type: Data
-    ) -> Dict[str, Tuple[np.ndarray, Dict[str, Any]]]:
+    def process(self, source_name: Data, stream_name: Data, source_type: Data) -> Dict[str, Tuple[np.ndarray, Dict[str, Any]]]:
         """Fetch the next chunk of data from the client."""
         if source_name is not None:
             self.params.lsl_stream.source_name.value = source_name.data
@@ -123,22 +203,65 @@ class LSLClient(Node):
             return
 
         try:
-            ch_info = self.client.info().desc().child("channels").child("channel")
-            ch_type = self.client.info().type().lower()
-            ch_names = []
-            for k in range(1, self.client.info().channel_count() + 1):
-                ch_names.append(ch_info.child_value("label") or "{} {:03d}".format(ch_type.upper(), k))
-                ch_info = ch_info.next_sibling()
+            ch_names = self._get_channel_names()
             self.ch_names = ch_names
         except Exception as e:
             print(f"Error fetching channel names from LSL stream: {e}")
             self.setup()
             return
 
-        meta = {"sfreq": self.client.info().nominal_srate(), "channels": {"dim0": self.ch_names}}
-        # if timestamps is not None:
-        #     meta["channels"]["dim1"] = list(timestamps)
+        self._validate_stream(ch_names, samples)
+
+        meta = {
+            "sfreq": self.client.info().nominal_srate(),
+            "channels": {"dim0": self.ch_names},
+        }
+        if timestamps is not None:
+            timestamps = [float(ts) for ts in timestamps]
+            meta["timestamps"] = timestamps
+            meta["channels"]["dim1"] = timestamps
         return {"out": (samples, meta)}
+
+    def _get_channel_names(self) -> List[str]:
+        ch_info = self.client.info().desc().child("channels").child("channel")
+        ch_type = self.client.info().type().lower()
+        ch_names = []
+        for k in range(1, self.client.info().channel_count() + 1):
+            ch_names.append(ch_info.child_value("label") or "{} {:03d}".format(ch_type.upper(), k))
+            ch_info = ch_info.next_sibling()
+        return ch_names
+
+    def _validate_stream(self, ch_names: List[str], samples: np.ndarray) -> None:
+        if not self.params.validation.strict_64ch_eeg.value:
+            return
+
+        expected_count = self.params.validation.expected_channel_count.value
+        expected_sfreq = self.params.validation.expected_sfreq.value
+        expected_labels = [
+            label.strip() for label in self.params.validation.expected_channel_labels.value.split(",") if label.strip()
+        ]
+
+        info = self.client.info()
+        if info.type() != "EEG":
+            raise ValueError(f'Expected EEG stream type, got "{info.type()}".')
+        if info.channel_count() != expected_count or samples.shape[0] != expected_count:
+            raise ValueError(
+                f"Expected exactly {expected_count} EEG channels, got "
+                f"stream={info.channel_count()} and samples={samples.shape[0]}."
+            )
+        if not np.isclose(info.nominal_srate(), expected_sfreq):
+            raise ValueError(f"Expected sampling frequency {expected_sfreq} Hz, got {info.nominal_srate()} Hz.")
+        duplicate_labels = sorted({label for label in ch_names if ch_names.count(label) > 1})
+        if duplicate_labels:
+            raise ValueError(f"Duplicate EEG channel labels present: {duplicate_labels}.")
+        missing_labels = [label for label in expected_labels if label not in ch_names]
+        extra_labels = [label for label in ch_names if label not in expected_labels]
+        if missing_labels or extra_labels:
+            raise ValueError(f"EEG channel labels differ; missing={missing_labels}, extra={extra_labels}.")
+        if ch_names != expected_labels:
+            for index, (expected, actual) in enumerate(zip(expected_labels, ch_names)):
+                if expected != actual:
+                    raise ValueError(f"EEG channel order mismatch at index {index}: " f"expected {expected!r}, got {actual!r}.")
 
     def connect(self) -> bool:
         """Connect to the LSL stream."""
@@ -192,7 +315,7 @@ class LSLClient(Node):
                         f'\nFound multiple streams matching source="{source_name}", name="{stream_name}"{type_suffix}:\n{matches}.'
                     )
             return False
-            
+
         # if len(matches) != 1:
         #     print(f'\nFound multiple streams matching source="{source_name}", name="{stream_name}":\n{matches}.')
         #     return False
