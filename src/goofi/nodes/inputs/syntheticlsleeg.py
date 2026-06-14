@@ -160,6 +160,10 @@ class SyntheticLSLEEG(Node):
         return self.params.signal.amplitude.value * (alpha + beta + slow) + noise
 
     @staticmethod
+    def _make_timestamps(start_sample: int, chunk_size: int, sfreq: float) -> np.ndarray:
+        return np.arange(start_sample, start_sample + chunk_size, dtype=float) / float(sfreq)
+
+    @staticmethod
     def _parse_channel_labels(labels: str) -> List[str]:
         parsed = [label.strip() for label in labels.split(",") if label.strip()]
         if not parsed:
