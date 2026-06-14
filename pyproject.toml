@@ -8,8 +8,15 @@ dependencies = {file = ["requirements.txt"]}
 [tool.black]
 line-length = 128
 
+[tool.pytest.ini_options]
+markers = [
+  "real_lsl: tests requiring pylsl and the native liblsl runtime",
+]
+
 [project.scripts]
 goofi-pipe = "goofi.manager:main"
+goofi-real-lsl-outlet = "goofi.tools.real_lsl_synthetic_outlet:main"
+goofi-real-lsl-validate = "goofi.tools.real_lsl_validate:main"
 
 [project]
 classifiers = [
