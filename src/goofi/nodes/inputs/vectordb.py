@@ -2,7 +2,6 @@ import os
 import pickle
 
 import numpy as np
-from usearch.index import Index
 
 from goofi.data import Data, DataType
 from goofi.node import Node
@@ -44,6 +43,13 @@ class VectorDB(Node):
         """
         Load the database index and mapping during initialization.
         """
+        try:
+            from usearch.index import Index
+        except ImportError as e:
+            raise RuntimeError(
+                "Missing dependency 'usearch' for VectorDB node. Please install it using 'pip install usearch'."
+            ) from e
+
         database_path = self.params.Control.database_path.value
         # database_path = os.path.join(self.assets_path, database_path)
         try:
