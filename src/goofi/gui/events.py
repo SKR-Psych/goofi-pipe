@@ -364,6 +364,7 @@ KEY_HANDLER_MAP = {
     dpg.mvKey_C: copy_selected_nodes,
     dpg.mvKey_V: paste_nodes,
     dpg.mvKey_Return: create_selected_node,
-    605: increase_gui_scale,  # plus key (dpg.mvKey_Plus erroneously maps to 61)
+    605: increase_gui_scale,  # numpad plus key
+    61: increase_gui_scale,   # standard equal/plus key
     dpg.mvKey_Minus: decrease_gui_scale,
 }
